@@ -11,8 +11,15 @@ use SMW\SQLStore\SQLStore;
 
 $basePath = getenv( 'MW_INSTALL_PATH' ) !== false ? getenv( 'MW_INSTALL_PATH' ) : __DIR__ . '/../../..';
 
+/**
+ * Load the required class
+ */
 // @codeCoverageIgnoreStart
-require_once $basePath . '/maintenance/Maintenance.php';
+if ( getenv( 'MW_INSTALL_PATH' ) !== false ) {
+	require_once getenv( 'MW_INSTALL_PATH' ) . '/maintenance/Maintenance.php';
+} else {
+	require_once '/www/wwwroot/MediaWiki/maintenance/Maintenance.php';
+}
 // @codeCoverageIgnoreEnd
 
 /**
