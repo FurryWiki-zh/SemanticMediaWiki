@@ -4,7 +4,7 @@ namespace SMW\Maintenance;
 
 use MediaWiki\Maintenance\Maintenance;
 use Onoi\MessageReporter\MessageReporter;
-use SMW\DIProperty;
+use SMW\DataItems\Property;
 use SMW\Services\ServicesFactory as ApplicationFactory;
 use SMW\Setup;
 use SMW\SQLStore\SQLStore;
@@ -130,7 +130,7 @@ class updateQueryDependencies extends Maintenance {
 		$connection = $store->getConnection( 'mw.db' );
 
 		$tableName = $store->getPropertyTableInfoFetcher()->findTableIdForProperty(
-			new DIProperty( '_ASK' )
+			new Property( '_ASK' )
 		);
 
 		$res = $connection->select(
