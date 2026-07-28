@@ -16,6 +16,7 @@ MediaWiki installation first. This is also required if you use a symbolic link f
 - [Maintenance Scripts](#maintenance-scripts)
   - [disposeOutdatedEntities.php](#disposeoutdatedentitiesphp)
   - [dumpRDF.php](#dumprdfphp)
+  - [optimizeStore.php](#optimizestorephp)
   - [populateHashField.php](#populatehashfieldphp)
   - [purgeEntityCache.php](#purgeentitycachephp)
   - [rebuildConceptCache.php](#rebuildconceptcachephp)
@@ -73,6 +74,18 @@ Usage:
 php maintenance/run.php SemanticMediaWiki:disposeOutdatedEntities
 ```
 
+To split disposal across N parallel processes (each handling a disjoint `smw_id % N` shard), run one process per shard:
+
+```sh
+php maintenance/run.php SemanticMediaWiki:disposeOutdatedEntities --of 4 --shard 0 &
+php maintenance/run.php SemanticMediaWiki:disposeOutdatedEntities --of 4 --shard 1 &
+php maintenance/run.php SemanticMediaWiki:disposeOutdatedEntities --of 4 --shard 2 &
+php maintenance/run.php SemanticMediaWiki:disposeOutdatedEntities --of 4 --shard 3 &
+wait
+```
+
+Tune N to what the database absorbs (disposal is write-bound). Query-link cleanup runs only on shard 0.
+
 ### dumpRDF.php
 
 Allows to do a complete RDF export of existing triples. Available since SMW 2.0.0
@@ -82,6 +95,17 @@ See also: [Help:Maintenance_script_dumpRDF.php](https://www.semantic-mediawiki.o
 Usage:
 ```sh
 php maintenance/run.php SemanticMediaWiki:dumpRDF [--file|--categories|--classes|--concepts|--types|--individuals|--page|--properties|--d|--e]
+```
+
+### optimizeStore.php
+
+Allows to optimize the data backend/store tables independently of the setup process. Available since SMW 7.1.0
+
+See also: [Help:Maintenance_script_optimizeStore.php](https://www.semantic-mediawiki.org/wiki/Help:Maintenance_script_optimizeStore.php)
+
+Usage:
+```sh
+php maintenance/run.php SemanticMediaWiki:optimizeStore [--backend|--with-maintenance-log]
 ```
 
 ### populateHashField.php
@@ -126,8 +150,10 @@ See also: [Help:Maintenance_script_rebuildData.php](https://www.semantic-mediawi
 
 Usage:
 ```sh
-php maintenance/run.php SemanticMediaWiki:rebuildData [-d|-s|-e|-f|-n|--startidfile|-b|-v|-c|-p|-t|--page|--redirects|--query|-f|--no-cache|--report-runtime|--debug|--skip-properties|--shallow-update|--ignore-exceptions|--exception-log|--with-maintenance-log|--revision-mode|--force-update|--dispose-outdated]
+php maintenance/run.php SemanticMediaWiki:rebuildData [-d|-s|-e|-f|-n|--startidfile|-b|-v|-c|-p|-t|--page|--redirects|--query|-f|--no-cache|--report-runtime|--debug|--skip-properties|--shallow-update|--ignore-exceptions|--exception-log|--with-maintenance-log|--revision-mode|--force-update|--dispose-outdated|--skip-dispose]
 ```
+
+Use `--skip-dispose` to skip the disposal prologue so several ranged rebuilds can run in parallel; run disposeOutdatedEntities.php (optionally sharded) once beforehand.
 
 ### rebuildElasticIndex.php
 

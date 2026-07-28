@@ -6,7 +6,6 @@ use MediaWiki\MediaWikiServices;
 use MediaWikiIntegrationTestCase;
 use SMW\DataValueFactory;
 use SMW\Export\Exporter;
-use SMW\MediaWiki\LinkBatch;
 use SMW\PropertyRegistry;
 use SMW\Query\QueryProcessor;
 use SMW\Services\ServicesFactory;
@@ -38,10 +37,41 @@ abstract class SMWIntegrationTestCase extends MediaWikiIntegrationTestCase {
 		// Load default settings specific to SMW
 		TestEnvironment::loadDefaultSettings( [ 'smwgQEqualitySupport' ] );
 
-		// Don't use temporary tables to avoid "Error: 1137 Can't reopen table" on mysql.
-		// Must be set before maybeSetupDB() reads this flag.
+		// MySQL (unlike MariaDB) cannot reference a TEMPORARY table more than
+		// once in a single query, so SMW lookups that self-join smw_object_ids
+		// fail with "Error 1137: Can't reopen table" when MediaWiki clones the
+		// test tables as temporary tables. Force normal tables on MySQL only;
+		// MariaDB lifted this restriction long ago and keeps temporary tables,
+		// which avoid the teardown TRUNCATE lock-wait timeout (see #6936). The
+		// flag must be set before maybeSetupDB() reads it.
 		// https://github.com/SemanticMediaWiki/SemanticMediaWiki/pull/80/commits/565061cd0b9ccabe521f0382938d013a599e4673
-		static::setCliArg( 'use-normal-tables', true );
+		if ( self::isMySqlServer() ) {
+			static::setCliArg( 'use-normal-tables', true );
+		}
+	}
+
+	/**
+	 * MediaWiki reports both MySQL and MariaDB as the 'mysql' database type, so
+	 * only the server version string distinguishes them: MariaDB embeds its own
+	 * name there. The "Can't reopen table" limitation is specific to genuine
+	 * MySQL servers.
+	 */
+	private static function isMySqlServer(): bool {
+		$db = MediaWikiServices::getInstance()
+			->getConnectionProvider()
+			->getReplicaDatabase();
+
+		if ( $db->getType() !== 'mysql' ) {
+			return false;
+		}
+
+		// Match MediaWiki core's own discriminator, which treats both the
+		// "MariaDB" name and the "-maria-" build suffix as MariaDB markers
+		// (see Wikimedia\Rdbms\DatabaseMySQL::getMySqlServerVariant()).
+		$version = $db->getServerVersion();
+
+		return !str_contains( $version, 'MariaDB' )
+			&& !str_contains( $version, '-maria-' );
 	}
 
 	/**
@@ -82,7 +112,6 @@ abstract class SMWIntegrationTestCase extends MediaWikiIntegrationTestCase {
 	  * Reset Semantic MediaWiki-related services and caches.
 	  */
 	private function resetSMWServices(): void {
-		LinkBatch::reset();
 		DataValueFactory::getInstance()->clear();
 		Exporter::clear();
 		CachingSemanticDataLookup::clear();
@@ -95,13 +124,10 @@ abstract class SMWIntegrationTestCase extends MediaWikiIntegrationTestCase {
 	 * Initialize SMW test environment configuration.
 	 */
 	private function initializeTestEnvironment(): void {
-		$fixedInMemoryLruCache = ServicesFactory::getInstance()->create( 'FixedInMemoryLruCache' );
-
 		$this->testEnvironment = new TestEnvironment();
 		$this->testEnvironment->addConfiguration( 'smwgEnabledDeferredUpdate', false );
 		$this->testEnvironment->disableSoftwareChangeTags();
 		$this->testEnvironment->registerObject( 'Store', $this->getStore() );
-		$this->testEnvironment->registerObject( 'Cache', $fixedInMemoryLruCache );
 
 		PropertyRegistry::clear();
 
@@ -134,14 +160,6 @@ abstract class SMWIntegrationTestCase extends MediaWikiIntegrationTestCase {
 		if ( $this->testEnvironment !== null ) {
 			$this->testEnvironment->tearDown();
 		}
-
-		// Commit or rollback any open transactions from page deletions
-		// (flushPages) before MW's tearDown truncates tables. Without this,
-		// delete transactions can hold row locks that block TRUNCATE,
-		// causing "Lock wait timeout" errors.
-		MediaWikiServices::getInstance()
-			->getDBLoadBalancerFactory()
-			->commitPrimaryChanges( __METHOD__ );
 
 		parent::tearDown();
 	}

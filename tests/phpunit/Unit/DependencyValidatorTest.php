@@ -2,7 +2,6 @@
 
 namespace SMW\Tests\Unit;
 
-use Onoi\Cache\FixedInMemoryLruCache;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use SMW\DataItems\WikiPage;
@@ -12,6 +11,7 @@ use SMW\EventDispatcher\EventDispatcher;
 use SMW\NamespaceExaminer;
 use SMW\SQLStore\QueryDependency\DependencyLinksValidator;
 use SMW\Tests\TestEnvironment;
+use Wikimedia\ObjectCache\HashBagOStuff;
 
 /**
  * @covers \SMW\DependencyValidator
@@ -180,6 +180,25 @@ class DependencyValidatorTest extends TestCase {
 		);
 	}
 
+	public function testHasLikelyOutdatedDependencies_RemainsTrueAcrossRepeatedChecks() {
+		// #7044: markTitle/hasLikelyOutdatedDependencies intentionally has no
+		// reset or expiry (by design, see #6882's "Out of scope" note). This
+		// means a client that keeps reloading a title with outdated
+		// dependencies will keep observing `true` here on every repeated
+		// view/request until the underlying update job runs and a fresh view
+		// no longer calls markTitle(). Bounding the number of client reloads
+		// is therefore the client's responsibility (ext.smw.util.purge.js).
+		$subject = WikiPage::newFromText( 'Foo' );
+		$title = $subject->getTitle();
+
+		$instance = $this->newInstance();
+		$instance->markTitle( $title );
+
+		$this->assertTrue( $instance->hasLikelyOutdatedDependencies( $title ) );
+		$this->assertTrue( $instance->hasLikelyOutdatedDependencies( $title ) );
+		$this->assertTrue( $instance->hasLikelyOutdatedDependencies( $title ) );
+	}
+
 	public function testCanKeepParserCache_NoCache() {
 		$this->entityCache->expects( $this->once() )
 			->method( 'contains' )
@@ -264,7 +283,7 @@ class DependencyValidatorTest extends TestCase {
 			->disableOriginalConstructor()
 			->getMock();
 
-		$realEntityCache = new EntityCache( new FixedInMemoryLruCache() );
+		$realEntityCache = new EntityCache( new HashBagOStuff() );
 
 		$instance = new DependencyValidator(
 			$this->namespaceExaminer,

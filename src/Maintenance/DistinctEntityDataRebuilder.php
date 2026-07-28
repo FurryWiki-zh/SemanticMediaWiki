@@ -2,7 +2,6 @@
 
 namespace SMW\Maintenance;
 
-use Exception;
 use MediaWiki\Title\Title;
 use MediaWiki\Title\TitleFactory;
 use Onoi\MessageReporter\MessageReporter;
@@ -16,6 +15,8 @@ use SMW\Query\QueryProcessor;
 use SMW\Query\QueryResult;
 use SMW\Store;
 use SMW\Utils\CliMsgFormatter;
+use SMW\Utils\PeriodicStatsFlusher;
+use Throwable;
 
 /**
  * @license GPL-2.0-or-later
@@ -33,6 +34,8 @@ class DistinctEntityDataRebuilder {
 	private $reporter;
 
 	private ?ExceptionFileLogger $exceptionFileLogger = null;
+
+	private ?PeriodicStatsFlusher $statsFlusher = null;
 
 	private array $filters = [];
 
@@ -74,6 +77,13 @@ class DistinctEntityDataRebuilder {
 	 */
 	public function setExceptionFileLogger( ExceptionFileLogger $exceptionFileLogger ): void {
 		$this->exceptionFileLogger = $exceptionFileLogger;
+	}
+
+	/**
+	 * @since 7.2.0
+	 */
+	public function setStatsFlusher( PeriodicStatsFlusher $statsFlusher ): void {
+		$this->statsFlusher = $statsFlusher;
 	}
 
 	/**
@@ -128,6 +138,10 @@ class DistinctEntityDataRebuilder {
 
 		foreach ( $pages as $key => $page ) {
 
+			if ( $this->statsFlusher !== null ) {
+				$this->statsFlusher->tick();
+			}
+
 			$this->rebuildCount++;
 			$progress = $cliMsgFormatter->progressCompact( $this->rebuildCount, $total );
 
@@ -167,9 +181,12 @@ class DistinctEntityDataRebuilder {
 			return $updatejob->run();
 		}
 
+		// doRebuild() iterates a fixed list of pages, so a caught error simply
+		// lets that foreach continue with the next page; no position
+		// advancement is needed here (unlike DataRebuilder::doUpdateById()).
 		try {
 			$updatejob->run();
-		} catch ( Exception $e ) {
+		} catch ( Throwable $e ) {
 			$this->exceptionFileLogger->recordException( $page->getPrefixedDBkey(), $e );
 		}
 	}

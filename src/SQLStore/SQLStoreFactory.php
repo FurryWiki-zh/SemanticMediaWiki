@@ -159,27 +159,27 @@ class SQLStoreFactory {
 	/**
 	 * @since 2.2
 	 *
-	 * @return ConceptCache
+	 * @return ConceptMaterializer
 	 */
-	public function newMasterConceptCache(): ConceptCache {
-		$conceptCache = new ConceptCache(
+	public function newMasterConceptCache(): ConceptMaterializer {
+		$conceptMaterializer = new ConceptMaterializer(
 			$this->store,
 			$this->queryEngineFactory->newConceptQuerySegmentBuilder()
 		);
 
-		$conceptCache->setUpperLimit(
+		$conceptMaterializer->setUpperLimit(
 			$GLOBALS['smwgQMaxLimit']
 		);
 
-		return $conceptCache;
+		return $conceptMaterializer;
 	}
 
 	/**
 	 * @since 2.2
 	 *
-	 * @return ConceptCache
+	 * @return ConceptMaterializer
 	 */
-	public function newSlaveConceptCache(): ConceptCache {
+	public function newSlaveConceptCache(): ConceptMaterializer {
 		return $this->newMasterConceptCache();
 	}
 
@@ -295,7 +295,7 @@ class SQLStoreFactory {
 
 		$cachedListLookup = new CachedListLookup(
 			$listLookup,
-			$cacheFactory->newMediaWikiCompositeCache( $cacheFactory->getMainCacheType() ),
+			ApplicationFactory::getInstance()->getObjectCache(),
 			$cacheOptions
 		);
 
@@ -431,7 +431,6 @@ class SQLStoreFactory {
 	 */
 	public function newInstaller(): Installer {
 		$applicationFactory = ApplicationFactory::getInstance();
-		$settings = $applicationFactory->getSettings();
 
 		$connection = $this->store->getConnection( DB_PRIMARY );
 
@@ -448,20 +447,7 @@ class SQLStoreFactory {
 			new TableBuildExaminerFactory()
 		);
 
-		$tableSchemaManager = new TableSchemaManager(
-			$this->store
-		);
-
-		$tableSchemaManager->setOptions(
-			[
-				'smwgEnabledFulltextSearch' => $settings->get( 'smwgEnabledFulltextSearch' ),
-				'smwgFulltextSearchTableOptions' => $settings->get( 'smwgFulltextSearchTableOptions' )
-			]
-		);
-
-		$tableSchemaManager->setFeatureFlags(
-			$settings->get( 'smwgFieldTypeFeatures' )
-		);
+		$tableSchemaManager = $this->newTableSchemaManager();
 
 		$setupFile = $applicationFactory->singleton( 'SetupFile' );
 
@@ -506,6 +492,63 @@ class SQLStoreFactory {
 		);
 
 		return $installer;
+	}
+
+	/**
+	 * @since 7.1.0
+	 */
+	public function newTableSchemaManager(): TableSchemaManager {
+		$settings = ApplicationFactory::getInstance()->getSettings();
+
+		$tableSchemaManager = new TableSchemaManager(
+			$this->store
+		);
+
+		$tableSchemaManager->setOptions(
+			[
+				'smwgEnabledFulltextSearch' => $settings->get( 'smwgEnabledFulltextSearch' ),
+				'smwgFulltextSearchTableOptions' => $settings->get( 'smwgFulltextSearchTableOptions' )
+			]
+		);
+
+		$tableSchemaManager->setFeatureFlags(
+			$settings->get( 'smwgFieldTypeFeatures' )
+		);
+
+		return $tableSchemaManager;
+	}
+
+	/**
+	 * Builds a self-contained table optimizer for standalone optimization runs
+	 * (see SQLStore::optimize). This deliberately does NOT share newInstaller()'s
+	 * TableBuilder: the install path relies on the Installer re-propagating the
+	 * reporter onto its own shared builder, so newInstaller() keeps its inline
+	 * optimizer wiring and only newTableSchemaManager() is reused.
+	 *
+	 * @since 7.1.0
+	 */
+	public function newTableOptimizer( MessageReporter $messageReporter ): TableOptimizer {
+		$tableBuilder = TableBuilder::factory(
+			$this->store->getConnection( DB_PRIMARY )
+		);
+
+		$tableBuilder->setMessageReporter(
+			$messageReporter
+		);
+
+		$tableOptimizer = new TableOptimizer(
+			$tableBuilder
+		);
+
+		$tableOptimizer->setSetupFile(
+			ApplicationFactory::getInstance()->singleton( 'SetupFile' )
+		);
+
+		$tableOptimizer->setMessageReporter(
+			$messageReporter
+		);
+
+		return $tableOptimizer;
 	}
 
 	/**
@@ -688,6 +731,10 @@ class SQLStoreFactory {
 			$idCacheManager
 		);
 
+		$sequenceMapFinder->setLogger(
+			$this->getLogger()
+		);
+
 		return $sequenceMapFinder;
 	}
 
@@ -702,6 +749,10 @@ class SQLStoreFactory {
 		$auxiliaryFields = new AuxiliaryFields(
 			$this->store->getConnection( 'mw.db' ),
 			$idCacheManager
+		);
+
+		$auxiliaryFields->setLogger(
+			$this->getLogger()
 		);
 
 		return $auxiliaryFields;
@@ -719,7 +770,8 @@ class SQLStoreFactory {
 
 		$cacheWarmer = new CacheWarmer(
 			$this->store,
-			$idCacheManager
+			$idCacheManager,
+			$applicationFactory->getLinkBatch()
 		);
 
 		$cacheWarmer->setDisplayTitleFinder(
@@ -833,8 +885,7 @@ class SQLStoreFactory {
 		);
 
 		$cachingSemanticDataLookup = new CachingSemanticDataLookup(
-			$semanticDataLookup,
-			ApplicationFactory::getInstance()->getCache()
+			$semanticDataLookup
 		);
 
 		return $cachingSemanticDataLookup;
@@ -1059,7 +1110,8 @@ class SQLStoreFactory {
 		return new PrefetchItemLookup(
 			$this->store,
 			$this->newSemanticDataLookup(),
-			$this->newPropertySubjectsLookup()
+			$this->newPropertySubjectsLookup(),
+			ApplicationFactory::getInstance()->getLinkBatch()
 		);
 	}
 

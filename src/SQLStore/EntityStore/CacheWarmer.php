@@ -33,6 +33,7 @@ class CacheWarmer {
 	public function __construct(
 		private readonly SQLStore $store,
 		private readonly IdCacheManager $idCacheManager,
+		private readonly LinkBatch $linkBatch,
 	) {
 	}
 
@@ -61,7 +62,7 @@ class CacheWarmer {
 	 */
 	public function prepareCache( $list = [] ): void {
 		$hashList = [];
-		$linkBatch = LinkBatch::singleton();
+		$linkBatch = $this->linkBatch;
 		$linkBatch->setCaller( __METHOD__ );
 
 		if ( $list instanceof QueryResult ) {
@@ -149,7 +150,7 @@ class CacheWarmer {
 				'smw_sort'
 			] )
 			->from( SQLStore::ID_TABLE )
-			->where( [ 'smw_hash' => $hashList ] )
+			->where( [ 'smw_hash' => array_map( [ $connection, 'escape_bytea' ], $hashList ) ] )
 			->caller( __METHOD__ )
 			->fetchResultSet();
 		foreach ( $rows as $row ) {

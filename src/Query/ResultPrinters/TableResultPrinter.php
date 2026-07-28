@@ -6,6 +6,7 @@ use MediaWiki\Html\Html;
 use SMW\DataItems\Blob;
 use SMW\DataItems\WikiPage;
 use SMW\DataValues\DataValue;
+use SMW\DataValues\TimeValue;
 use SMW\Localizer\Message;
 use SMW\Query\PrintRequest;
 use SMW\Query\QueryResult;
@@ -24,6 +25,14 @@ use SMW\Utils\HtmlTable;
  * @author mwjames
  */
 class TableResultPrinter extends ResultPrinter {
+
+	/**
+	 * Scaling factor used to turn the Julian Day date sort key into a
+	 * decimal-free integer for `data-sort-value`. It matches the seven decimal
+	 * places that JulianDay::format() keeps, so the integer is exact and
+	 * preserves the original ordering. See #6830.
+	 */
+	private const DATE_SORT_FACTOR = 10000000;
 
 	private ?HtmlTable $htmlTable = null;
 
@@ -47,6 +56,15 @@ class TableResultPrinter extends ResultPrinter {
 	 */
 	public function isDeferrable(): bool {
 		return true;
+	}
+
+	/**
+	 * @see ResultPrinter::dependsOnUserLanguage
+	 *
+	 * {@inheritDoc}
+	 */
+	public function dependsOnUserLanguage(): bool {
+		return false;
 	}
 
 	/**
@@ -126,6 +144,20 @@ class TableResultPrinter extends ResultPrinter {
 				// #2702 Use a fixed output on a requested plain printout
 				$mode = $this->isHTML && $isPlain ? SMW_OUTPUT_WIKI : $outputMode;
 				$text = $pr->getText( $mode, ( $isPlain ? null : $this->mLinker ) );
+
+				// getText( SMW_OUTPUT_WIKI ) returns the label unescaped and HtmlTable
+				// emits header content verbatim into <th>, so a user-controlled plain
+				// header (e.g. mainlabel) is escaped here. Non-plain HTML is escaped by
+				// the formatter; inline wikitext output is sanitised by the parser.
+				//
+				// In this branch $mode is SMW_OUTPUT_WIKI with a null linker, so getText()
+				// returns the raw label; Phan cannot narrow the mode and over-taints it as
+				// already escaped via the HTML formatter path, hence the suppression.
+				if ( $this->isHTML && $isPlain ) {
+					// @phan-suppress-next-line SecurityCheck-DoubleEscaped
+					$text = htmlspecialchars( (string)$text, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8' );
+				}
+
 				$headerList[] = $pr->getCanonicalLabel();
 				// $attributes['class'] is a CSS class built from the (stripped) column
 				// label; HtmlTable escapes attributes once. Phan over-taints it via the
@@ -275,12 +307,24 @@ class TableResultPrinter extends ResultPrinter {
 				$attributes['class'] = "$columnClass smwtype$dataValueType";
 			}
 
+			// Dates expose their sort key as a Julian Day float (e.g. "2440618.5").
+			// MediaWiki's locale-aware tablesorter treats the "." as a group
+			// separator under locales such as German, strips it, and so sorts the
+			// column by the number of fractional digits rather than chronologically
+			// (#6830). Emit a decimal-free, locale-proof integer that preserves the
+			// exact ordering of the Julian Day sort key instead.
+			$sortValue = $sortKey;
+
+			if ( $dataValues[0] instanceof TimeValue && is_numeric( $sortKey ) ) {
+				$sortValue = (string)(int)round( (float)$sortKey * self::DATE_SORT_FACTOR );
+			}
+
 			if ( is_numeric( $sortKey ) ) {
-				$attributes['data-sort-value'] = $sortKey;
+				$attributes['data-sort-value'] = $sortValue;
 			}
 
 			if ( $this->isDataTable && $sortKey !== '' ) {
-				$attributes['data-order'] = $sortKey;
+				$attributes['data-order'] = $sortValue;
 			}
 
 			$alignment = trim( $printRequest->getParameter( 'align' ) );
@@ -320,15 +364,25 @@ class TableResultPrinter extends ResultPrinter {
 	 * @return string
 	 */
 	protected function getCellContent( array $dataValues, $outputMode, $isSubject ): string {
-		$dataValueMethod = $this->prefixParameterProcessor->useLongText( $isSubject ) ? 'getLongText' : 'getShortText';
+		$useLongText = $this->prefixParameterProcessor->useLongText( $isSubject );
+		$dataValueMethod = $useLongText ? 'getLongText' : 'getShortText';
 
 		$values = [];
 		foreach ( $dataValues as $dv ) {
 
+			// Dates use the HTML accessor so the formatter's semantic <time>
+			// element is emitted even when the table is produced in wiki output
+			// mode (inline #ask). The <time> markup is valid in the parsed
+			// wikitext, and HTML output (Special:Ask) is unchanged.
+			if ( $dv instanceof TimeValue ) {
+				$value = $useLongText
+					? $dv->getLongHTMLText( $this->getLinker( $isSubject ) )
+					: $dv->getShortHTMLText( $this->getLinker( $isSubject ) );
+
 			// Restore output in Special:Ask on:
 			// - file/image parsing
 			// - text formatting on string elements including italic, bold etc.
-			if ( ( $outputMode === SMW_OUTPUT_HTML && $dv->getDataItem() instanceof WikiPage && $dv->getDataItem()->getNamespace() === NS_FILE ) ||
+			} elseif ( ( $outputMode === SMW_OUTPUT_HTML && $dv->getDataItem() instanceof WikiPage && $dv->getDataItem()->getNamespace() === NS_FILE ) ||
 				( $outputMode === SMW_OUTPUT_HTML && $dv->getDataItem() instanceof Blob ) ) {
 				// Too lazy to handle the Parser object and besides the Message
 				// parse does the job and ensures no other hook is executed
@@ -350,10 +404,42 @@ class TableResultPrinter extends ResultPrinter {
 		} elseif ( !$isSubject && $sep === 'ol' && count( $values ) > 1 ) {
 			$html = '<ol><li>' . implode( '</li><li>', $values ) . '</li></ol>';
 		} else {
-			$html = implode( $this->params['sep'], $values );
+			$html = implode( $this->getValueSeparator( $outputMode ), $values );
 		}
 
 		return $html;
+	}
+
+	/**
+	 * Returns the separator placed between the multiple values of a table cell.
+	 *
+	 * Only wiki output (inline `#ask`) is sanitised downstream by the parser,
+	 * so there the raw value is returned unchanged and legitimate wikitext
+	 * separators keep working. Every other output mode is emitted straight into
+	 * the response and bypasses the parser's tag sanitisation: HTML output
+	 * (`Special:Ask`), RAW output (`Special:Ask` with `request_type=raw`, used
+	 * by remote requests) and FILE output all land in an HTML context where a
+	 * user-supplied `sep` would allow HTML/script injection. In those modes the
+	 * value is escaped, allowlisting only the `<br>` line-break variants that
+	 * are the intended separator markup.
+	 *
+	 * If the renderer ever gains richer separator semantics, keep this
+	 * allowlist explicit rather than widening the allowed HTML surface.
+	 *
+	 * @since 7.2.0
+	 */
+	private function getValueSeparator( int $outputMode ): string {
+		$sep = $this->params['sep'];
+
+		if ( $outputMode === SMW_OUTPUT_WIKI ) {
+			return $sep;
+		}
+
+		if ( preg_match( '#^\s*<br\s*/?>\s*$#i', $sep ) ) {
+			return $sep;
+		}
+
+		return htmlspecialchars( $sep, ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8' );
 	}
 
 	/**

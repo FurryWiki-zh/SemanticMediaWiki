@@ -12,6 +12,7 @@ use SMW\Setup;
 use SMW\Store;
 use SMW\StoreFactory;
 use SMW\Utils\CliMsgFormatter;
+use SMW\Utils\PeriodicStatsFlusher;
 
 /**
  * Load the required class
@@ -57,6 +58,9 @@ if ( getenv( 'MW_INSTALL_PATH' ) !== false ) {
  * --server=<server> The protocol and server name to as base URLs, e.g.
  *              http://en.wikipedia.org. This is sometimes necessary because
  *              server name detection may fail in command line scripts.
+ * --use-job    Enqueue update jobs into the job queue instead of running them inline,
+ *              so they can be processed in parallel with
+ *              `runJobs.php --type smw.update --procs N`. Applies to full rebuilds.
  *
  * @author Yaron Koren
  * @author Markus Krötzsch
@@ -92,6 +96,7 @@ class rebuildData extends Maintenance {
 		$this->addOption( 'namespace', 'Only refresh pages in the selected namespace. Example: --namespace="NS_MAIN"', false, false );
 		$this->addOption( 'redirects', 'Only refresh redirect pages', false );
 		$this->addOption( 'dispose-outdated', 'Only Remove outdated marked entities (including pending references).', false );
+		$this->addOption( 'skip-dispose', 'Skip the outdated-entity disposal prologue (run disposeOutdatedEntities.php separately, e.g. for parallel ranged rebuilds).', false );
 		$this->addOption( 'remove-remnantentities', 'Check and remove remnant entities (ghosts) from tables without a corresponding hash field entry', false );
 
 		$this->addOption( 'skip-properties', 'Skip the default properties rebuild (only recommended when successive build steps are used)', false );
@@ -100,8 +105,9 @@ class rebuildData extends Maintenance {
 
 		$this->addOption( 'force-update', 'Force an update even when an associated revision is known', false );
 		$this->addOption( 'revision-mode', 'Skip entities where its associated revision matches the latests referenced revision of an associated page', false );
+		$this->addOption( 'use-job', 'Enqueue update jobs into the job queue instead of running them inline, so they can be processed in parallel with `runJobs.php --type smw.update --procs N`. Applies to full rebuilds.', false );
 
-		$this->addOption( 'ignore-exceptions', 'Ignore exceptions and log exception to a file', false );
+		$this->addOption( 'ignore-exceptions', 'Ignore exceptions and errors (e.g. a parser TypeError on a single page) and log them to a file instead of aborting the run', false );
 		$this->addOption( 'exception-log', 'Exception log file location (e.g. /tmp/logs/)', false, true );
 		$this->addOption( 'with-maintenance-log', 'Add log entry to `Special:Log` about the maintenance run.', false );
 
@@ -167,6 +173,10 @@ class rebuildData extends Maintenance {
 		$dataRebuilder = $maintenanceFactory->newDataRebuilder(
 			$store,
 			[ $this, 'reportMessage' ]
+		);
+
+		$dataRebuilder->setStatsFlusher(
+			PeriodicStatsFlusher::newFromGlobalState()
 		);
 
 		if ( $this->hasOption( 'f' ) ) {
@@ -250,6 +260,13 @@ class rebuildData extends Maintenance {
 
 				$this->reportMessage( "\n" );
 			}
+		}
+
+		// A run that logged one or more exceptions under --ignore-exceptions did
+		// not complete cleanly. Return false so MediaWiki exits with a non-zero
+		// status and cron/CI can detect the incomplete rebuild.
+		if ( $result && $dataRebuilder->getExceptionCount() > 0 ) {
+			$result = false;
 		}
 
 		return $result;

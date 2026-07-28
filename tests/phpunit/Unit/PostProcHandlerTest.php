@@ -5,7 +5,6 @@ namespace SMW\Tests\Unit;
 use MediaWiki\Parser\ParserOutput;
 use MediaWiki\Request\WebRequest;
 use MediaWiki\Title\Title;
-use Onoi\Cache\Cache;
 use PHPUnit\Framework\TestCase;
 use SMW\DataItems\WikiPage;
 use SMW\DependencyValidator;
@@ -18,6 +17,7 @@ use SMW\SQLStore\ChangeOp\ChangeDiff;
 use SMW\SQLStore\ChangeOp\FieldChangeOp;
 use SMW\SQLStore\ChangeOp\TableChangeOp;
 use SMW\SQLStore\QueryDependency\DependencyLinksValidator;
+use Wikimedia\ObjectCache\BagOStuff;
 
 /**
  * @covers \SMW\PostProcHandler
@@ -38,7 +38,7 @@ class PostProcHandlerTest extends TestCase {
 
 		$this->parserOutput = $this->createMock( ParserOutput::class );
 
-		$this->cache = $this->createMock( Cache::class );
+		$this->cache = $this->createMock( BagOStuff::class );
 	}
 
 	public function testCanConstruct() {
@@ -87,7 +87,7 @@ class PostProcHandlerTest extends TestCase {
 
 	public function testGetHtml_CheckQuery() {
 		$this->cache->expects( $this->atLeastOnce() )
-			->method( 'fetch' )
+			->method( 'get' )
 			->willReturn( true );
 
 		$this->parserOutput->expects( $this->exactly( 2 ) )
@@ -141,7 +141,7 @@ class PostProcHandlerTest extends TestCase {
 	public function testGetHtml_DifferentExtensionData() {
 		// inverse testing - Mocking the data to ensure that the html has DifferentExtensionData
 		$this->cache->expects( $this->atLeastOnce() )
-			->method( 'fetch' )
+			->method( 'get' )
 			->willReturn( true );
 
 		$this->parserOutput->expects( $this->exactly( 2 ) )
@@ -282,6 +282,73 @@ class PostProcHandlerTest extends TestCase {
 	}
 
 	/**
+	 * Reproduces the server-side condition behind #7044: as long as
+	 * `hasLikelyOutdatedDependencies` remains true for a title (e.g. the
+	 * update job backlog has not caught up yet), every subsequent view of
+	 * that title keeps emitting the `.page-purge` div, one per request/reload.
+	 * The client is therefore solely responsible for bounding how many
+	 * reloads it performs (see ext.smw.util.purge.js).
+	 */
+	public function testPurgePageOnQueryDependency_RepeatedOnSuccessiveViews() {
+		$this->parserOutput->expects( $this->any() )
+			->method( 'getExtensionData' )
+			->with( PostProcHandler::POST_EDIT_UPDATE )
+			->willReturn( [ 'Bar' ] );
+
+		$instance = new PostProcHandler(
+			$this->parserOutput,
+			$this->cache
+		);
+
+		$instance->setOptions(
+			[
+				'purge-page' => [ 'on-outdated-query-dependency' => true ]
+			]
+		);
+
+		$title = $this->createMock( Title::class );
+
+		$dependencyLinksValidator = $this->createMock( DependencyLinksValidator::class );
+		$namespaceExaminer = $this->createMock( NamespaceExaminer::class );
+		$entityCache = $this->createMock( EntityCache::class );
+		$eventDispatcher = $this->createMock( EventDispatcher::class );
+		$dependencyValidator = new DependencyValidator(
+			$namespaceExaminer,
+			$dependencyLinksValidator,
+			$entityCache,
+			'',
+			3600,
+			$eventDispatcher
+		);
+		// Simulates the dependency remaining outdated across several distinct
+		// requests (e.g. the update job has not run yet by the time of the
+		// next reload).
+		$dependencyValidator->markTitle( $title );
+
+		$title->expects( $this->atLeastOnce() )
+			->method( 'getPrefixedDBKey' )
+			->willReturn( 'Foo' );
+
+		$title->expects( $this->atLeastOnce() )
+			->method( 'getNamespace' )
+			->willReturn( NS_MAIN );
+
+		$webRequest = $this->createMock( WebRequest::class );
+
+		// First view: emits the purge div (this is the same behaviour already
+		// covered by testPurgePageOnQueryDependency).
+		$firstHtml = $instance->getHtml( $title, $webRequest );
+
+		// A second, independent view of the same title (simulating the reload
+		// the client just performed) still finds the dependency outdated and
+		// therefore emits the purge div again, unbounded on the server side.
+		$secondHtml = $instance->getHtml( $title, $webRequest );
+
+		$this->assertStringContainsString( 'page-purge', $firstHtml );
+		$this->assertStringContainsString( 'page-purge', $secondHtml );
+	}
+
+	/**
 	 * @dataProvider validPropertyKeyProvider
 	 */
 	public function testGetHtmlOnCookieAndValidChangeDiff( $key ) {
@@ -305,7 +372,7 @@ class PostProcHandlerTest extends TestCase {
 		);
 
 		$this->cache->expects( $this->once() )
-			->method( 'fetch' )
+			->method( 'get' )
 			->willReturn( $changeDiff->serialize() );
 
 		$this->parserOutput->expects( $this->once() )

@@ -2,12 +2,13 @@
 
 namespace SMW\Tests\Unit\SQLStore\EntityStore;
 
-use Onoi\Cache\FixedInMemoryLruCache;
 use PHPUnit\Framework\TestCase;
+use SMW\Cache\InMemoryLruCache;
 use SMW\DataItems\Property;
 use SMW\DataItems\WikiPage;
 use SMW\DisplayTitleFinder;
 use SMW\MediaWiki\Connection\Database;
+use SMW\MediaWiki\LinkBatch;
 use SMW\SQLStore\EntityStore\CacheWarmer;
 use SMW\SQLStore\EntityStore\IdCacheManager;
 use SMW\SQLStore\SQLStore;
@@ -29,6 +30,7 @@ class CacheWarmerTest extends TestCase {
 	private $idCacheManager;
 	private $store;
 	private $cache;
+	private $linkBatch;
 
 	protected function setUp(): void {
 		$this->idCacheManager = $this->getMockBuilder( IdCacheManager::class )
@@ -39,13 +41,17 @@ class CacheWarmerTest extends TestCase {
 			->disableOriginalConstructor()
 			->getMock();
 
-		$this->cache = new FixedInMemoryLruCache();
+		$this->cache = new InMemoryLruCache();
+
+		$this->linkBatch = $this->getMockBuilder( LinkBatch::class )
+			->disableOriginalConstructor()
+			->getMock();
 	}
 
 	public function testCanConstruct() {
 		$this->assertInstanceOf(
 			CacheWarmer::class,
-			new CacheWarmer( $this->store, $this->idCacheManager )
+			new CacheWarmer( $this->store, $this->idCacheManager, $this->linkBatch )
 		);
 	}
 
@@ -75,6 +81,8 @@ class CacheWarmerTest extends TestCase {
 			->disableOriginalConstructor()
 			->getMock();
 
+		$connection->method( 'escape_bytea' )->willReturnArgument( 0 );
+
 		$whereConditions = [];
 		$qb = $this->createMockSelectQueryBuilder( [ (object)$row ], $whereConditions );
 
@@ -92,7 +100,8 @@ class CacheWarmerTest extends TestCase {
 
 		$instance = new CacheWarmer(
 			$this->store,
-			$this->idCacheManager
+			$this->idCacheManager,
+			$this->linkBatch
 		);
 
 		$instance->setThresholdLimit( 1 );
@@ -114,7 +123,8 @@ class CacheWarmerTest extends TestCase {
 
 		$instance = new CacheWarmer(
 			$this->store,
-			$this->idCacheManager
+			$this->idCacheManager,
+			$this->linkBatch
 		);
 
 		$instance->setDisplayTitleFinder( $displayTitleFinder );
@@ -151,6 +161,8 @@ class CacheWarmerTest extends TestCase {
 			->disableOriginalConstructor()
 			->getMock();
 
+		$connection->method( 'escape_bytea' )->willReturnArgument( 0 );
+
 		$whereConditions = [];
 		$qb = $this->createMockSelectQueryBuilder( [ (object)$row ], $whereConditions );
 
@@ -168,7 +180,8 @@ class CacheWarmerTest extends TestCase {
 
 		$instance = new CacheWarmer(
 			$this->store,
-			$this->idCacheManager
+			$this->idCacheManager,
+			$this->linkBatch
 		);
 
 		$instance->setThresholdLimit( 1 );
@@ -192,6 +205,8 @@ class CacheWarmerTest extends TestCase {
 			->disableOriginalConstructor()
 			->getMock();
 
+		$connection->method( 'escape_bytea' )->willReturnArgument( 0 );
+
 		$this->store = $this->getMockBuilder( SQLStore::class )
 			->disableOriginalConstructor()
 			->getMock();
@@ -202,7 +217,8 @@ class CacheWarmerTest extends TestCase {
 
 		$instance = new CacheWarmer(
 			$this->store,
-			$this->idCacheManager
+			$this->idCacheManager,
+			$this->linkBatch
 		);
 
 		$instance->setThresholdLimit( 1 );

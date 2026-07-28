@@ -2,6 +2,7 @@
 
 namespace SMW\Tests\Unit\SQLStore;
 
+use Onoi\MessageReporter\MessageReporter;
 use PHPUnit\Framework\TestCase;
 use Psr\Log\LoggerInterface;
 use SMW\DataItems\WikiPage;
@@ -14,7 +15,7 @@ use SMW\QueryEngine;
 use SMW\Services\ServicesContainer;
 use SMW\SortLetter;
 use SMW\SQLStore\ChangeOp\ChangeOp;
-use SMW\SQLStore\ConceptCache;
+use SMW\SQLStore\ConceptMaterializer;
 use SMW\SQLStore\EntityStore\AuxiliaryFields;
 use SMW\SQLStore\EntityStore\CacheWarmer;
 use SMW\SQLStore\EntityStore\CachingSemanticDataLookup;
@@ -34,6 +35,7 @@ use SMW\SQLStore\EntityStore\SequenceMapFinder;
 use SMW\SQLStore\EntityStore\SubobjectListFinder;
 use SMW\SQLStore\EntityStore\TraversalPropertyLookup;
 use SMW\SQLStore\Installer;
+use SMW\SQLStore\Installer\TableOptimizer;
 use SMW\SQLStore\Lookup\ByGroupPropertyValuesLookup;
 use SMW\SQLStore\Lookup\DisplayTitleLookup;
 use SMW\SQLStore\Lookup\EntityUniquenessLookup;
@@ -59,6 +61,7 @@ use SMW\SQLStore\RedirectUpdater;
 use SMW\SQLStore\SQLStore;
 use SMW\SQLStore\SQLStoreFactory;
 use SMW\SQLStore\SQLStoreUpdater;
+use SMW\SQLStore\TableBuilder\TableSchemaManager;
 use SMW\SQLStore\TableFieldUpdater;
 use SMW\Tests\TestEnvironment;
 use Wikimedia\Rdbms\Database;
@@ -126,7 +129,7 @@ class SQLStoreFactoryTest extends TestCase {
 		$instance = new SQLStoreFactory( new SQLStore() );
 
 		$this->assertInstanceOf(
-			ConceptCache::class,
+			ConceptMaterializer::class,
 			$instance->newMasterConceptCache()
 		);
 	}
@@ -135,7 +138,7 @@ class SQLStoreFactoryTest extends TestCase {
 		$instance = new SQLStoreFactory( new SQLStore() );
 
 		$this->assertInstanceOf(
-			ConceptCache::class,
+			ConceptMaterializer::class,
 			$instance->newSlaveConceptCache()
 		);
 	}
@@ -261,6 +264,42 @@ class SQLStoreFactoryTest extends TestCase {
 		$this->assertInstanceOf(
 			Installer::class,
 			$instance->newInstaller()
+		);
+	}
+
+	public function testCanConstructTableSchemaManager() {
+		$instance = new SQLStoreFactory( $this->store );
+
+		$this->assertInstanceOf(
+			TableSchemaManager::class,
+			$instance->newTableSchemaManager()
+		);
+	}
+
+	public function testCanConstructTableOptimizer() {
+		$connection = $this->getMockBuilder( Database::class )
+			->disableOriginalConstructor()
+			->getMockForAbstractClass();
+
+		$connection->expects( $this->any() )
+			->method( 'getType' )
+			->willReturn( 'mysql' );
+
+		$store = $this->getMockBuilder( SQLStore::class )
+			->disableOriginalConstructor()
+			->getMock();
+
+		$store->expects( $this->once() )
+			->method( 'getConnection' )
+			->willReturn( $connection );
+
+		$messageReporter = $this->createMock( MessageReporter::class );
+
+		$instance = new SQLStoreFactory( $store );
+
+		$this->assertInstanceOf(
+			TableOptimizer::class,
+			$instance->newTableOptimizer( $messageReporter )
 		);
 	}
 

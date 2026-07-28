@@ -7,8 +7,7 @@ use MediaWiki\Title\Title;
 use SMW\DataItems\WikiPage;
 use SMW\DataModel\SemanticData;
 use SMW\DataValueFactory;
-use SMW\DataValues\PropertyValue;
-use SMW\Localizer\Localizer;
+use SMW\DataValues\DataValue;
 use SMW\MediaWiki\MagicWordsFinder;
 use SMW\MediaWiki\Outputs;
 use SMW\MediaWiki\RedirectTargetFinder;
@@ -169,7 +168,10 @@ class InTextAnnotationParser {
 
 		if ( $this->isEnabledNamespace ) {
 			$this->parserData->getOutput()->addModules( $this->getModules() );
-			$this->parserData->addExtraParserKey( 'userlang' );
+
+			if ( $this->parserData->variesByUserLanguage() ) {
+				$this->parserData->addExtraParserKey( 'userlang' );
+			}
 		}
 
 		$this->parserData->copyToParserOutput();
@@ -339,7 +341,8 @@ class InTextAnnotationParser {
 
 		// #1855
 		if ( substr( $value, 0, 3 ) === '@@@' ) {
-			return $this->makePropertyLink( $subject, $properties, $value, $valueCaption );
+			$propertyLinkRenderer = new PropertyLinkRenderer( $this->parserData );
+			return $propertyLinkRenderer->render( $properties, $value, $valueCaption );
 		}
 
 		return $this->addPropertyValue( $subject, $properties, $value, $valueCaption );
@@ -390,6 +393,7 @@ class InTextAnnotationParser {
 			$result = $origValue;
 		} elseif ( isset( $dataValue ) ) {
 			$result = $dataValue->getShortWikitext( true );
+			$this->addFileUsage( $dataValue );
 		}
 
 		// If necessary add an error text
@@ -402,7 +406,39 @@ class InTextAnnotationParser {
 			$result = str_replace( ':', '&#58;', $result ) . $dataValue->getErrorText();
 		}
 
+		// The rendered output varies by the viewer's interface language when
+		// the value is invalid (the error message is localized) or when the
+		// value formatter reported user-language output (e.g. a localized
+		// unit-conversion tooltip). Record this so the `userlang` parser-cache
+		// key is added (see InTextAnnotationParser::parse()).
+		if ( isset( $dataValue ) &&
+			( !$dataValue->isValid() || $dataValue->hasUserLanguageOutput() )
+		) {
+			$this->parserData->markVariesByUserLanguage();
+		}
+
 		return $result;
+	}
+
+	/**
+	 * Records a file referenced through a property value (e.g.
+	 * `[[Has file::File:Example.mp4]]`) as a dependency of the parsed page, so
+	 * the page shows up in the file's usage tracking. An embedded image already
+	 * registers this link through its `[[File:...]]` markup, but a non-image
+	 * file is rendered as a plain link whose dependency would otherwise be
+	 * missing (#6141).
+	 */
+	private function addFileUsage( DataValue $dataValue ): void {
+		$dataItem = $dataValue->getDataItem();
+
+		if (
+			$dataItem instanceof WikiPage &&
+			$dataItem->getNamespace() === NS_FILE &&
+			$dataItem->getInterwiki() === '' &&
+			$dataItem->getSubobjectName() === ''
+		) {
+			$this->parserData->getOutput()->addImage( $dataItem->getDBkey() );
+		}
 	}
 
 	/**
@@ -431,42 +467,6 @@ class InTextAnnotationParser {
 
 	private function isSemanticEnabledForNamespace( Title $title ) {
 		return $this->applicationFactory->getNamespaceExaminer()->isSemanticEnabled( $title->getNamespace() );
-	}
-
-	private function makePropertyLink( WikiPage $subject, $properties, $value, $caption ) {
-		$property = end( $properties );
-		$linker = smwfGetLinker();
-		$class = 'smw-property';
-
-		// #4037
-		// [[Foo::@@@|#] where `|#` indicates a noLink request
-		if ( $caption === '#' ) {
-			$linker = false;
-			$caption = false;
-			$class = 'smw-property nolink';
-		}
-
-		$dataValue = DataValueFactory::getInstance()->newPropertyValueByLabel(
-			$property,
-			$caption,
-			$subject
-		);
-
-		$dataValue->setLinkAttributes( [ 'class' => $class ] );
-
-		$lang = Localizer::getAnnotatedLanguageCodeFrom( $value );
-		if ( $lang !== false ) {
-			$dataValue->setOption( $dataValue::OPT_USER_LANGUAGE, $lang );
-			$dataValue->setCaption(
-				$caption === false ? $dataValue->getWikiValue() : $caption
-			);
-		}
-
-		if ( $dataValue instanceof PropertyValue ) {
-			$dataValue->setOption( $dataValue::OPT_HIGHLIGHT_LINKER, true );
-		}
-
-		return $dataValue->getShortWikitext( $linker );
 	}
 
 }
