@@ -4,8 +4,8 @@ namespace SMW\MediaWiki\Search\ProfileForm;
 
 use MediaWiki\Html\Html;
 use MediaWiki\Request\WebRequest;
+use MediaWiki\Skin\SkinComponentUtils;
 use MediaWiki\Specials\SpecialSearch;
-use MediaWiki\Title\Title;
 use SearchEngine;
 use SMW\Formatters\Infolink;
 use SMW\Localizer\Message;
@@ -344,7 +344,7 @@ class ProfileForm {
 
 		if ( $link !== '' ) {
 			$text .= $this->section( 'smw-search-profile-extended-section-query' );
-			$text .= Html::rawElement( 'pre', [], $query ) . '&nbsp;';
+			$text .= Html::element( 'pre', [], $query ) . '&nbsp;';
 			$text .= $this->msg( [ 'smw-search-profile-extended-help-query-link', $link ], Message::TEXT );
 		}
 
@@ -392,7 +392,10 @@ class ProfileForm {
 		$formLink = Html::element(
 			'a',
 			[
-				'href' => Title::newFromText( 'Special:SearchByProperty/Schema type/' . self::SCHEMA_TYPE )->getFullUrl()
+				'href' => SkinComponentUtils::makeSpecialUrl( 'SearchByProperty', [
+					'property' => 'Schema type',
+					'value' => self::SCHEMA_TYPE
+				] )
 			],
 			$this->msg( 'smw-search-profile-extended-help-find-forms' )
 		);

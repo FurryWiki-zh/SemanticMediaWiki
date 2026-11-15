@@ -2,6 +2,7 @@
 
 namespace SMW\Elastic\Indexer;
 
+use MediaWiki\Content\TextContent;
 use MediaWiki\Revision\RevisionLookup;
 use MediaWiki\Revision\RevisionRecord;
 use MediaWiki\Revision\SlotRecord;
@@ -235,7 +236,7 @@ class Indexer {
 
 		$content = $revision->getContent( SlotRecord::MAIN, RevisionRecord::RAW );
 
-		return $content->getNativeData();
+		return $content instanceof TextContent ? $content->getText() : '';
 	}
 
 	/**
@@ -254,15 +255,7 @@ class Indexer {
 			return;
 		}
 
-		$params = [
-			'_index' => $this->getIndexName( Client::TYPE_DATA )
-		];
-
-		$this->bulk->clear();
-		$this->bulk->head( $params );
-
-		$this->bulk->infuseDocument( $document );
-		$this->bulk->execute();
+		$this->sendDocuments( [ $document ] );
 
 		$this->logger->info(
 			'Indexer Data index completed ({subject}, {id}) '
@@ -279,6 +272,57 @@ class Indexer {
 		);
 	}
 
+	/**
+	 * Sends the documents in one bulk request, without the replication check of indexDocument()
+	 *
+	 * @since 7.4.1
+	 *
+	 * @param Document[] $documents
+	 */
+	public function indexDocuments( array $documents ): void {
+		if ( $documents === [] ) {
+			return;
+		}
+
+		Timer::start( __METHOD__ );
+
+		$this->sendDocuments( $documents );
+
+		// The client returns a string when the whole request failed, which loses all of its documents,
+		// so they are sent again one at a time to lose only those that fail again
+		if ( is_string( $this->bulk->getResponse() ) && count( $documents ) > 1 ) {
+			foreach ( $documents as $document ) {
+				$this->sendDocuments( [ $document ] );
+			}
+		}
+
+		$this->logger->info(
+			'Indexer Data index completed ({count} documents) procTime (in sec): {procTime} Response: {response}',
+			[
+				'method' => __METHOD__,
+				'role' => 'developer',
+				'origin' => $this->origin,
+				'count' => count( $documents ),
+				'procTime' => Timer::getElapsedTime( __METHOD__ ),
+				'response' => $this->bulk->getResponse()
+			]
+		);
+	}
+
+	/**
+	 * @param Document[] $documents
+	 */
+	private function sendDocuments( array $documents ): void {
+		$this->bulk->clear();
+		$this->bulk->head( [ '_index' => $this->getIndexName( Client::TYPE_DATA ) ] );
+
+		foreach ( $documents as $document ) {
+			$this->bulk->infuseDocument( $document );
+		}
+
+		$this->bulk->execute();
+	}
+
 	private function canReplicate(): bool {
 		$connection = $this->store->getConnection( 'elastic' );
 
@@ -293,24 +337,17 @@ class Indexer {
 	private function makeSubject( WikiPage $subject ): array {
 		$title = $subject->getDBKey();
 
-		if ( $subject->getNamespace() !== SMW_NS_PROPERTY || $title[0] !== '_' ) {
+		if ( $subject->getNamespace() !== SMW_NS_PROPERTY || !str_starts_with( $title ?? '', '_' ) ) {
 			$title = str_replace( '_', ' ', $title );
 		}
 
-		$sort = $subject->getSortKey();
-		$sort = Collator::singleton()->getSortKey( $sort );
+		// #7079 Keep in step with `DocumentCreator::makeSubject`: `create`
+		// replaces the whole document, so a value derived differently here would
+		// undo what `DocumentCreator` wrote.
+		$sort = Collator::singleton()->armoredSortKey( $subject->getSortKey() );
 
-		// Use collated sort field if available
-		if ( $subject->getOption( 'sort', '' ) !== '' ) {
-			$sort = $subject->getOption( 'sort' );
-		}
-
-		// This may loose some non valif UTF-8 characters as it is required by ES
-		// to be strict UTF-8 otherwise the ES indexer will fail with a serialization
-		// error because ES only allows UTF-8 but when the collator applies something
-		// like `uca-default-u-kn` it can produce characters not valid for/by
-		// ES hence the sorting compared to the SQLStore will be different (given
-		// the DB stores the byte representation)
+		// Elasticsearch rejects a document that is not strict UTF-8, and a
+		// collation is free to emit anything
 		$sort = mb_convert_encoding( $sort, 'UTF-8', 'UTF-8' );
 
 		return [

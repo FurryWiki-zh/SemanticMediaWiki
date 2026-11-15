@@ -320,6 +320,92 @@ class EntityIdManagerTest extends TestCase {
 	}
 
 	/**
+	 * The Elasticsearch indexer needs an entity's recorded sort key alongside
+	 * its ID, and must not mint an ID for an entity that has none. See #7079.
+	 */
+	public function testFindIdAndSortKeyReturnsTheRecordedSortKey() {
+		$selectRow = new stdClass;
+		$selectRow->smw_id = 9999;
+		$selectRow->smw_sort = '';
+		$selectRow->smw_sortkey = 'Duck, Donald';
+		$selectRow->smw_proptable_hash = serialize( 'Foo' );
+		$selectRow->smw_hash = '___hash___';
+
+		$qb = $this->createMockSelectQueryBuilder( [ $selectRow ] );
+		$this->connection->expects( $this->any() )
+			->method( 'newSelectQueryBuilder' )
+			->willReturn( $qb );
+
+		$instance = $this->newEntityIdManager();
+
+		$this->assertSame(
+			[ 9999, 'Duck, Donald' ],
+			$instance->findIdAndSortKey( new WikiPage( 'Foo', NS_MAIN ) )
+		);
+	}
+
+	public function testFindAssociatedRevsGivesTheRevisionOfEachIdAndZeroWithoutOne() {
+		$this->connection->method( 'newSelectQueryBuilder' )
+			->willReturn( $this->createMockSelectQueryBuilder( [
+				(object)[ 'smw_id' => '1', 'smw_rev' => '10' ],
+				(object)[ 'smw_id' => '3', 'smw_rev' => null ]
+			] ) );
+
+		$this->assertSame(
+			[ 1 => 10, 2 => 0, 3 => 0 ],
+			$this->newEntityIdManager()->findAssociatedRevs( [ 1, 2, 3 ] )
+		);
+	}
+
+	public function testFindCanonicalIdReturnsTheIdThePageCarries() {
+		$subject = WikiPage::newFromText( 'Foo' );
+		$subject->setId( 42 );
+
+		$this->assertSame( 42, $this->newEntityIdManagerFindingId( 9999 )->findCanonicalId( $subject ) );
+	}
+
+	public function testFindCanonicalIdLooksUpAPageWithoutId() {
+		$this->assertSame(
+			9999,
+			$this->newEntityIdManagerFindingId( 9999 )->findCanonicalId( WikiPage::newFromText( 'Foo' ) )
+		);
+	}
+
+	public function testFindCanonicalIdResolvesARedirectToItsTarget() {
+		$this->connection->method( 'newInsertQueryBuilder' )
+			->willReturnCallback( fn () => $this->createMockInsertQueryBuilder() );
+
+		$instance = $this->newEntityIdManagerFindingId( 9999 );
+		$instance->addRedirect( 7, 'Redirect', NS_MAIN );
+
+		$redirect = new WikiPage( 'Redirect', NS_MAIN, SMW_SQL3_SMWREDIIW );
+		$redirect->setId( 42 );
+
+		$this->assertSame( 7, $instance->findCanonicalId( $redirect ) );
+	}
+
+	private function newEntityIdManager(): EntityIdManager {
+		$store = $this->getMockBuilder( SQLStore::class )
+			->disableOriginalConstructor()
+			->getMock();
+
+		$store->expects( $this->any() )
+			->method( 'getConnection' )
+			->willReturn( $this->connection );
+
+		return new EntityIdManager( $store, $this->factory, $this->settings );
+	}
+
+	private function newEntityIdManagerFindingId( int $id ): EntityIdManager {
+		$row = (object)[ 'smw_id' => $id, 'smw_sort' => '', 'smw_sortkey' => 'Foo', 'smw_hash' => '___hash___' ];
+
+		$this->connection->method( 'newSelectQueryBuilder' )
+			->willReturnCallback( fn () => $this->createMockSelectQueryBuilder( [ $row ] ) );
+
+		return $this->newEntityIdManager();
+	}
+
+	/**
 	 * @dataProvider pageIdandSortProvider
 	 */
 	public function testMakeSMWPageID( $parameters ) {

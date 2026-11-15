@@ -3,6 +3,8 @@
 namespace SMW\SQLStore\EntityStore;
 
 use SMW\DataItems\DataItem;
+use SMW\Exception\DataItemException;
+use SMW\SQLStore\EntityStore\Exception\DataItemHandlerException;
 use SMW\SQLStore\SQLStore;
 
 /**
@@ -152,6 +154,21 @@ abstract class DataItemHandler {
 	abstract public function getWhereConds( DataItem $dataItem );
 
 	/**
+	 * Representations of the same DataItem that may still be present in the
+	 * store from before a storage format change, keyed as in getWhereConds().
+	 * Queries match these alongside the current form so that data written by an
+	 * earlier version keeps matching until it is rebuilt.
+	 *
+	 * Returns an empty array when there is no such form to match.
+	 *
+	 * @since 7.3.0
+	 * @internal
+	 */
+	public function getLegacyWhereConds( DataItem $dataItem ): array {
+		return [];
+	}
+
+	/**
 	 * Return an array of fields=>values that is to be inserted when
 	 * writing the given DataItem to the database. Values should be set
 	 * for all columns, even if NULL. This array is used to perform all
@@ -203,16 +220,16 @@ abstract class DataItemHandler {
 
 	/**
 	 * Create a dataitem from an array of DB keys or a single DB key
-	 * string. May throw an DataItemException if the given DB keys
-	 * cannot be converted back into a dataitem. Each implementation
-	 * of this method must otherwise run without errors for both array
-	 * and string inputs.
+	 * string. May throw a DataItemException or DataItemHandlerException
+	 * if the given DB keys cannot be converted back into a dataitem.
+	 * Each implementation of this method must otherwise run without
+	 * errors for both array and string inputs.
 	 *
 	 * @since 1.8
 	 *
 	 * @param array|string $dbkeys
 	 *
-	 * @throws DataItemException
+	 * @throws DataItemException|DataItemHandlerException
 	 * @return DataItem
 	 */
 	abstract public function dataItemFromDBKeys( $dbkeys );
@@ -223,7 +240,7 @@ abstract class DataItemHandler {
 	 * @param array|string $dbkeys
 	 *
 	 * @return DataItem
-	 * @throws DataItemException
+	 * @throws DataItemException|DataItemHandlerException
 	 */
 	public function newFromDBKeys( $dbkeys ) {
 		return $this->dataItemFromDBKeys( $dbkeys );

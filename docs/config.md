@@ -269,6 +269,31 @@ until `update.php` has run once.
 **Deprecated since:** 7.0.0; will be removed in 8.0.0.
 **Default:** the extension's root directory
 
+## $smwgConfigProfiles
+
+Configuration profiles from `data/config` to apply, by name with or without
+the `.php` extension. Profiles are applied after `LocalSettings.php`, so
+their settings take precedence over the same settings there.
+
+- `db-primary-keys`: adds primary keys to all Semantic MediaWiki tables, for
+  database clusters that require them, such as Percona XtraDB Cluster
+- `developer`: debugging and logging settings; not for production
+- `elastic-fileingest`: sets the ElasticStore as the default store and
+  enables file ingestion
+- `media`: adds the `_MIME`, `_MEDIA` and `_ATTCH_LINK` special properties to
+  `$smwgPageSpecialProperties`
+
+Run `update.php` after enabling or removing `db-primary-keys`,
+`elastic-fileingest` or `media`. An unknown name, or a profile that is also
+loaded with `require` from `LocalSettings.php`, throws an exception.
+
+```php
+$smwgConfigProfiles = [ 'media', 'db-primary-keys' ];
+```
+
+**Since:** 7.3.0
+**Default:** `[]`
+
 ## $smwgCompactLinkSupport
 
 When `true`, encodes and compresses Special:Browse / Special:Ask /
@@ -593,8 +618,9 @@ Collation strategy for entity sort values. This must correspond to
 applies to all entities in the wiki — it cannot be applied selectively
 per-query because the `smw_sort` field stores a pre-computed sort value.
 
-Any change to this setting requires running the `updateEntityCollation.php`
-maintenance script.
+After changing this setting, run `update.php` or `setupStore.php`, then `updateEntityCollation.php`.
+You can keep the wiki online while it runs, but until it finishes, query results sort pages in a mix
+of the old and new collation.
 
 **Since:** 3.0
 **Default:** `"identity"`

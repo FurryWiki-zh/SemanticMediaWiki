@@ -71,7 +71,7 @@ class DummyClient extends Client {
 	 */
 	public function getSoftwareInfo(): array {
 		return [
-			'component' => "[https://www.elastic.co/elasticsearch/ Elasticsearch]",
+			'component' => "[https://www.elastic.co/elasticsearch Elasticsearch]",
 			'version' => null
 		];
 	}
@@ -181,6 +181,13 @@ class DummyClient extends Client {
 	 * @see Client::get
 	 */
 	public function get( array $params ): array {
+		return [];
+	}
+
+	/**
+	 * @see Client::mget
+	 */
+	public function mget( array $params ): array {
 		return [];
 	}
 

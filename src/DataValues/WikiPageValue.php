@@ -564,6 +564,7 @@ class WikiPageValue extends DataValue {
 
 		// Should not normally happen, but anyway ...
 		$this->addErrorMsg( [ 'smw_notitle', $errArg ] );
+		return null;
 	}
 
 	/**
@@ -652,6 +653,17 @@ class WikiPageValue extends DataValue {
 		}
 
 		$displayTitle = $this->getDisplayTitle();
+
+		// #7073 (A display title may repeat the namespace which the short caption
+		// omits, the pipe trick already removes one such prefix)
+		if ( !$this->hasFeature( SMW_DV_WPV_PIPETRICK ) ) {
+			$nsText = Localizer::getInstance()->getNsText( $this->m_dataitem->getNamespace() );
+
+			// Namespace prefixes are case-insensitive, as in `help:Foo`
+			if ( $nsText !== '' ) {
+				$displayTitle = preg_replace( '/^' . preg_quote( $nsText, '/' ) . ':\s*/iu', '', $displayTitle );
+			}
+		}
 
 		if ( $displayTitle === '' ) {
 			$displayTitle = $this->getText();

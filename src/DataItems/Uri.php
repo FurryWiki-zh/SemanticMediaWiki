@@ -80,11 +80,7 @@ class Uri extends DataItem {
 			. ( $this->m_query ? '?' . $this->m_query : '' )
 			. ( $this->m_fragment ? '#' . $this->m_fragment : '' );
 
-		// #1878
-		// https://tools.ietf.org/html/rfc3986
-		// Normalize spaces to use `_` instead of %20 and so ensure
-		// that http://example.org/Foo bar === http://example.org/Foo_bar === http://example.org/Foo%20bar
-		return str_replace( [ ' ', '%20' ], '_', $uri );
+		return $uri;
 	}
 
 	public function getScheme() {
@@ -109,7 +105,9 @@ class Uri extends DataItem {
 	 * @return string
 	 */
 	public function getSortKey(): string {
-		return urldecode( $this->getURI() );
+		// rawurldecode(), not urldecode(): a `+` in a URI is a literal plus,
+		// not an encoded space.
+		return rawurldecode( $this->getURI() );
 	}
 
 	public function getSerialization(): string {

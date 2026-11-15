@@ -40,6 +40,7 @@ use SMW\MediaWiki\LinkBatch;
 use SMW\MediaWiki\MediaWikiNsContentReader;
 use SMW\MediaWiki\MwCollaboratorFactory;
 use SMW\MediaWiki\PageCreator;
+use SMW\MediaWiki\ParsoidUse;
 use SMW\MediaWiki\Permission\TitlePermissions;
 use SMW\MediaWiki\PermissionManager;
 use SMW\MediaWiki\PostProcHandlerFactory;
@@ -51,6 +52,7 @@ use SMW\Property\AnnotatorFactory;
 use SMW\Property\SpecificationLookup;
 use SMW\PropertyLabelFinder;
 use SMW\Protection\ProtectionValidator;
+use SMW\Query\Cache\ResultCache;
 use SMW\Query\Processor\ParamListProcessor;
 use SMW\Query\Processor\QueryCreator;
 use SMW\Query\QuerySourceFactory;
@@ -175,7 +177,8 @@ return [
 		}
 
 		return new EntityCache(
-			$servicesFactory->getObjectCache()
+			$servicesFactory->getObjectCache(),
+			new MapCacheLRU( 1000 )
 		);
 	},
 
@@ -525,7 +528,8 @@ return [
 			$servicesFactory->getStore(),
 			$servicesFactory->getEntityCache(),
 			$servicesFactory->getPermissionManager(),
-			$servicesFactory->getPageCreator()
+			$servicesFactory->getPageCreator(),
+			$services->getRestrictionStore()
 		);
 
 		$protectionValidator->setImportPerformers(
@@ -599,6 +603,10 @@ return [
 		return LoggerFactory::getInstance( 'smw' );
 	},
 
+	'SMW.ParsoidUse' => static function ( MediaWikiServices $services ): ParsoidUse {
+		return new ParsoidUse( $services->getMainConfig() );
+	},
+
 	'SMW.PropertyLabelFinder' => static function ( MediaWikiServices $services ): PropertyLabelFinder {
 		$servicesFactory = ServicesFactory::getInstance();
 
@@ -614,6 +622,16 @@ return [
 			$lang->getCanonicalPropertyLabels(),
 			$lang->getCanonicalDatatypeLabels()
 		);
+	},
+
+	'SMW.ResultCache' => static function ( MediaWikiServices $services ): ResultCache {
+		$servicesFactory = ServicesFactory::getInstance();
+
+		if ( $servicesFactory->hasTestOverride( 'ResultCache' ) ) {
+			return $servicesFactory->getResultCache();
+		}
+
+		return $servicesFactory->newResultCache();
 	},
 
 	'SMW.InvalidateResultCacheEventListener' => static function ( MediaWikiServices $services ): InvalidateResultCacheEventListener {
@@ -847,9 +865,8 @@ return [
 		return new DependencyValidatorFactory(
 			$servicesFactory->getNamespaceExaminer(),
 			$servicesFactory->getQueryDependencyLinksStoreFactory(),
-			$servicesFactory->getEntityCache(),
-			$servicesFactory->getEventDispatcher(),
-			$services->getParserCache()
+			$servicesFactory->getObjectCache(),
+			$servicesFactory->getEventDispatcher()
 		);
 	},
 

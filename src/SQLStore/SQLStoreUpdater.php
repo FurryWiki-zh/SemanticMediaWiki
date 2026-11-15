@@ -10,6 +10,7 @@ use SMW\DataItems\Property;
 use SMW\DataItems\WikiPage;
 use SMW\DataModel\SemanticData;
 use SMW\Enum;
+use SMW\MediaWiki\Connection\Database;
 use SMW\Parameters;
 use SMW\Services\ServicesFactory as ApplicationFactory;
 use SMW\SQLStore\EntityStore\CachingSemanticDataLookup;
@@ -68,7 +69,7 @@ class SQLStoreUpdater {
 		$this->propertyTableRowDiffer = $this->factory->newPropertyTableRowDiffer();
 		$this->propertyTableUpdater = $this->factory->newPropertyTableUpdater();
 		$this->semanticDataLookup = $this->factory->newSemanticDataLookup();
-		$this->redirectUpdater = $this->factory->newRedirectUpdater();
+		$this->redirectUpdater = $this->factory->newRedirectUpdater( $this->propertyTableUpdater );
 		$this->hookContainer = MediaWikiServices::getInstance()->getHookContainer();
 	}
 
@@ -168,6 +169,9 @@ class SQLStoreUpdater {
 	 * @since 1.8
 	 *
 	 * @param SemanticData $semanticData
+	 *
+	 * @throws Throwable Whatever the update threw; rethrown after the section
+	 *  transaction is rolled back.
 	 */
 	public function doDataUpdate( SemanticData $semanticData ): Status {
 		// Deprecated since 3.1, use SMW::SQLStore::BeforeDataUpdateComplete
@@ -240,6 +244,8 @@ class SQLStoreUpdater {
 				}
 			}
 
+			$this->propertyTableUpdater->writeSharedRowsOnCommit();
+
 			$rev_id = $semanticData->getExtensionData( 'revision_id' );
 			if ( $rev_id !== null ) {
 				$this->store->getObjectIds()->updateRevField( $sid, $rev_id );
@@ -274,13 +280,44 @@ class SQLStoreUpdater {
 			// shutdown with "Explicit transaction still active". Roll the
 			// section back and rethrow so callers (e.g. rebuildData
 			// --ignore-exceptions) can log and skip this entity and continue.
-			$connection->cancelSectionTransaction( SQLStore::UPDATE_TRANSACTION );
+			$this->cancelUpdateSectionTransaction( $connection, $subject, $e );
+			$this->propertyTableUpdater->discardSharedRows();
+
+			// The ID table's cache still holds the IDs and hashes the rolled-back update wrote, so
+			// repeating the update in this process would find nothing to change
+			$this->store->getObjectIds()->initCache();
+
 			throw $e;
 		}
 
 		$propertyChangeListener->runChangeListeners();
 
 		return $status;
+	}
+
+	/**
+	 * The rollback can fail on its own, e.g. MariaDB 1305 when the savepoint is
+	 * already gone. Report that failure but let $updateError remain the
+	 * exception that propagates: it is the one that says why the update failed.
+	 */
+	private function cancelUpdateSectionTransaction(
+		Database $connection,
+		WikiPage $subject,
+		Throwable $updateError
+	): void {
+		try {
+			$connection->cancelSectionTransaction( SQLStore::UPDATE_TRANSACTION );
+		} catch ( Throwable $rollbackError ) {
+			$this->factory->getLogger()->error(
+				'Section rollback for {subject} failed with "{rollback_error}" while handling "{update_error}"',
+				[
+					'subject' => $subject->getHash(),
+					'rollback_error' => $rollbackError->getMessage(),
+					'update_error' => $updateError->getMessage(),
+					'exception' => $rollbackError
+				]
+			);
+		}
 	}
 
 	/**
@@ -433,11 +470,18 @@ class SQLStoreUpdater {
 			'redirect_id' => $redirectId
 		];
 
-		$this->redirectUpdater->doUpdate(
-			WikiPage::newFromTitle( $oldTitle ),
-			WikiPage::newFromTitle( $newTitle ),
-			$options
-		);
+		try {
+			$this->redirectUpdater->doUpdate(
+				WikiPage::newFromTitle( $oldTitle ),
+				WikiPage::newFromTitle( $newTitle ),
+				$options
+			);
+		} catch ( Throwable $e ) {
+			$this->propertyTableUpdater->discardSharedRows();
+			throw $e;
+		}
+
+		$this->propertyTableUpdater->writeSharedRowsOnCommit();
 
 		$this->redirectUpdater->invalidateLookupCache(
 			$this->semanticDataLookup
